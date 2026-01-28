@@ -71,33 +71,73 @@ func ensureSoundsDirExists(_ dir: URL) {
     }
 }
 
-// Copy bundled defaults into the selected sounds directory if missing.
-// Requires Package.swift: resources: [.process("sounds")]
-func seedBundledDefaultsIfMissing(into dir: URL) {
-    ensureSoundsDirExists(dir)
-
-    let defaults: [(name: String, ext: String)] = [
-        ("door", "mp3"),
-        ("pedo", "mp3")
+// Seed default sounds into the selected sounds directory if missing.
+// Homebrew-friendly: defaults live in a share directory (e.g. /opt/homebrew/share/lid-sound/sounds).
+func findDefaultSoundsSourceDir() -> URL? {
+    let candidates: [URL] = [
+        // Apple Silicon Homebrew
+        URL(fileURLWithPath: "/opt/homebrew/share/lid-sound/sounds", isDirectory: true),
+        // Intel Homebrew
+        URL(fileURLWithPath: "/usr/local/share/lid-sound/sounds", isDirectory: true)
     ]
 
-    for d in defaults {
-        guard let src = Bundle.module.url(forResource: d.name, withExtension: d.ext) else {
-            continue
-        }
-        let dst = dir.appendingPathComponent("\(d.name).\(d.ext)")
-        if FileManager.default.fileExists(atPath: dst.path) { continue }
-        do {
-            try FileManager.default.copyItem(at: src, to: dst)
-        } catch {
-            fputs("Failed to seed default sound \(d.name).\(d.ext): \(error)\n", stderr)
+    for dir in candidates {
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue {
+            return dir
         }
     }
+
+    // Try resolving relative to the executable (…/bin/lid-sound -> …/share/lid-sound/sounds)
+    if let exec = Bundle.main.executableURL {
+        let share = exec
+            .deletingLastPathComponent() // bin/
+            .deletingLastPathComponent() // prefix/
+            .appendingPathComponent("share/lid-sound/sounds", isDirectory: true)
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: share.path, isDirectory: &isDir), isDir.boolValue {
+            return share
+        }
+    }
+
+    // Dev fallback: local repo layout (if present)
+    if let exec = Bundle.main.executableURL {
+        let maybeRepo = exec
+            .deletingLastPathComponent() // .build/release
+            .deletingLastPathComponent() // .build
+            .appendingPathComponent("Sources/lid-sound/sounds", isDirectory: true)
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: maybeRepo.path, isDirectory: &isDir), isDir.boolValue {
+            return maybeRepo
+        }
+    }
+
+    return nil
+}
+
+func seedDefaultSoundsIfMissing(into dir: URL) {
+    ensureSoundsDirExists(dir)
+
+    // If there is already at least one mp3 in the target dir, do nothing.
+    if let enumerator = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+        for case let url as URL in enumerator {
+            if url.pathExtension.lowercased() == "mp3" {
+                return
+            }
+        }
+    }
+
+    guard let sourceDir = findDefaultSoundsSourceDir() else {
+        // No defaults available on this machine.
+        return
+    }
+
+    copyMp3s(from: sourceDir, to: dir)
 }
 
 func setSoundsDir(to newDir: URL) {
     saveSoundsDirURL(newDir)
-    seedBundledDefaultsIfMissing(into: newDir)
+    seedDefaultSoundsIfMissing(into: newDir)
 }
 
 func copyMp3s(from sourceDir: URL, to targetDir: URL) {
@@ -370,7 +410,7 @@ Usage:
 Notes:
 - Put .mp3 files in: \(loadSoundsDirURL().path)
 - set-sound opens an interactive picker (↑/↓, Space, Enter, Esc)
-- add-sounds sets the sounds directory and seeds bundled defaults if missing. If you pass a directory, it also copies any .mp3 from there.
+- add-sounds sets the sounds directory and seeds default sounds (from the install share dir) if missing. If you pass a directory, it also copies any .mp3 from there.
 """
     )
 }
@@ -379,7 +419,7 @@ let args = CommandLine.arguments
 let command = args.count >= 2 ? args[1].lowercased() : "run"
 
 // Ensure we have a usable directory and defaults on first run.
-seedBundledDefaultsIfMissing(into: loadSoundsDirURL())
+seedDefaultSoundsIfMissing(into: loadSoundsDirURL())
 
 switch command {
 case "set-sound":
