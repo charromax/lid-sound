@@ -13,10 +13,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "lid-sound",
-            resources: [
-                .process("sounds")
-            ]
+            name: "lid-sound"
         )
     ]
 )
