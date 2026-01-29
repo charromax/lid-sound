@@ -41,7 +41,7 @@ Pick a sound (interactive UI):
 lid-sound set-sound
 ```
 
-![lid-sound usage](assets/usage.png)
+![lid-sound usage](assets/lidsoundhelp.png)
 
 Add your own `.mp3` files (they will be copied into the app sounds directory):
 
