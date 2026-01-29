@@ -1,4 +1,4 @@
-
+![lid-sound banner](assets/run.png)
 
 # lid-sound
 
@@ -40,6 +40,8 @@ Pick a sound (interactive UI):
 ```bash
 lid-sound set-sound
 ```
+
+![lid-sound usage](assets/usage.png)
 
 Add your own `.mp3` files (they will be copied into the app sounds directory):
 
