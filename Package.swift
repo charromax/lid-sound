@@ -12,8 +12,18 @@ let package = Package(
         .executable(name: "lid-sound", targets: ["lid-sound"])
     ],
     targets: [
+        .target(
+            name: "LidSoundCore",
+            resources: [.process("Resources")]
+        ),
         .executableTarget(
-            name: "lid-sound"
+            name: "lid-sound",
+            dependencies: ["LidSoundCore"],
+            resources: [.copy("sounds")]
+        ),
+        .testTarget(
+            name: "lid-soundTests",
+            dependencies: ["LidSoundCore"]
         )
     ]
 )
