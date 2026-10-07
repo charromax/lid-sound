@@ -2,8 +2,9 @@
 
 # lid-sound
 
-A macOS CLI that plays a sound on lid-related events (currently: **wake / lid open**).
-Includes an interactive terminal UI with sound preview.
+A macOS CLI that turns lid motion into responsive audio on Macs with a readable
+lid-angle sensor. On Macs without a usable sensor, it preserves one-shot sound
+playback after wake.
 
 ---
 
@@ -41,6 +42,24 @@ Pick a sound (interactive UI):
 lid-sound set-sound
 ```
 
+Choose the source used for angle-driven audio:
+
+```bash
+lid-sound set-angle-mode
+```
+
+Select `bundled-loop` (the default) for the included sound or
+`selected-sound` to loop the sound selected with `set-sound`. You can also set
+the mode non-interactively:
+
+```bash
+lid-sound set-angle-mode bundled-loop
+lid-sound set-angle-mode selected-sound
+```
+
+Changes made with `set-sound` or `set-angle-mode` reload the source in an
+already-running `lid-sound run` listener. The selected file must be an MP3.
+
 ![lid-sound usage](assets/lidsoundhelp.png)
 
 Add your own `.mp3` files (they will be copied into the app sounds directory):
@@ -54,6 +73,22 @@ Run the listener in the foreground:
 ```bash
 lid-sound run
 ```
+
+At startup, `run` reports `Angle sensor: available: input reports ready` when
+it can open the Apple lid-angle HID input-report endpoint. If it reports an
+unavailable sensor and a reason, lid-sound keeps running with the existing
+wake-event fallback. `lid-sound status` performs the same readiness probe and
+shows the active angle-audio mode and any selected-sound availability problem.
+
+When the sensor is readable, the active source is prepared at startup and starts
+when the lid moves. Lid angle controls pitch from 0 through 130 degrees, while
+movement speed controls volume: motion at or below 1.5 degrees per second is
+silent and volume reaches maximum at 15 degrees per second. When the lid stops,
+the source fades promptly to silence while remaining prepared; short pauses
+therefore resume without restarting the loop. This behavior applies to both
+bundled-loop and selected-sound modes. A readable sensor does not also trigger
+a second wake sound. A selected MP3 can have audible loop boundaries because
+arbitrary user audio is not converted into a seamless loop.
 
 ---
 
@@ -76,6 +111,16 @@ lid-sound run
 
 On first run, if the user sounds directory contains no `.mp3` files,
 `lid-sound` automatically copies the defaults from the Homebrew share directory.
+
+The bundled angle-motion fallback MP3 is packaged with the SwiftPM executable
+during development.
+For Homebrew installations, it is resolved from:
+
+- Apple Silicon: `/opt/homebrew/share/lid-sound/lid-motion-loop.mp3`
+- Intel: `/usr/local/share/lid-sound/lid-motion-loop.mp3`
+
+The bundled sound may repeat while the lid is moving. A selected MP3 can also
+have audible loop boundaries.
 
 ---
 
