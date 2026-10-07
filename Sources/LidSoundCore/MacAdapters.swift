@@ -142,6 +142,8 @@ public final class ContinuousAudioController {
     private var mixer: AVAudioMixerNode?
     private var state = ContinuousAudioState()
     private var parameterSmoother = AudioParameterSmoother()
+    private var releaseTask: Task<Void, Never>?
+    private var releaseRate: Float = 1
 
     public init() {}
 
@@ -185,15 +187,26 @@ public final class ContinuousAudioController {
 
     public func apply(_ output: AngleAudioOutput) {
         guard let mixer, let varispeed else { return }
+        releaseTask?.cancel()
+        releaseTask = nil
+        let now = ProcessInfo.processInfo.systemUptime
         switch state.command(for: output) {
-        case .start, .update, .mute, .resume:
-            let parameters = parameterSmoother.apply(output, at: ProcessInfo.processInfo.systemUptime)
+        case .start, .update, .resume:
+            let parameters = parameterSmoother.apply(output, at: now)
             mixer.outputVolume = parameters.gain
             varispeed.rate = parameters.rate
+        case .mute:
+            let parameters = parameterSmoother.apply(output, at: now)
+            mixer.outputVolume = parameters.gain
+            varispeed.rate = parameters.rate
+            releaseRate = parameters.rate
+            startRelease()
         }
     }
 
     public func stop() {
+        releaseTask?.cancel()
+        releaseTask = nil
         playerNode?.stop()
         audioEngine?.stop()
         mixer = nil
@@ -201,6 +214,28 @@ public final class ContinuousAudioController {
         playerNode = nil
         audioEngine = nil
         state = ContinuousAudioState()
+    }
+
+    private func startRelease() {
+        releaseTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: NSEC_PER_SEC / 60)
+                guard !Task.isCancelled, let self else { return }
+                guard let mixer = self.mixer, let varispeed = self.varispeed else { return }
+                let parameters = self.parameterSmoother.apply(
+                    AngleAudioOutput(gain: 0, rate: self.releaseRate),
+                    at: ProcessInfo.processInfo.systemUptime
+                )
+                mixer.outputVolume = parameters.gain
+                varispeed.rate = parameters.rate
+                if parameters.gain <= 0.001 {
+                    mixer.outputVolume = 0
+                    self.parameterSmoother.finishRelease(at: ProcessInfo.processInfo.systemUptime)
+                    self.releaseTask = nil
+                    return
+                }
+            }
+        }
     }
 
     private enum AudioControllerError: LocalizedError {

@@ -136,16 +136,19 @@ func runSetSoundTUI() {
 
 @MainActor
 func seedDefaultSoundsIfNeeded() {
-    let fileManager = FileManager.default
-    let destination = preferences.soundsDirectory
     do {
-        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
-        guard let bundledSounds = Bundle.module.url(forResource: "sounds", withExtension: nil),
-              let files = try? fileManager.contentsOfDirectory(at: bundledSounds, includingPropertiesForKeys: nil),
-              AngleAudioSourceResolver.availableSelectedSounds(preferences: preferences).isEmpty else { return }
-        for file in files where file.pathExtension.lowercased() == "mp3" {
-            try fileManager.copyItem(at: file, to: destination.appendingPathComponent(file.lastPathComponent))
-        }
+        let sourceDirectories = [
+            Bundle.module.url(forResource: "sounds", withExtension: nil),
+            URL(fileURLWithPath: "/opt/homebrew/share/lid-sound/sounds", isDirectory: true),
+            URL(fileURLWithPath: "/usr/local/share/lid-sound/sounds", isDirectory: true),
+            Bundle.main.executableURL?
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("share/lid-sound/sounds", isDirectory: true)
+        ].compactMap { $0 }
+        try DefaultSoundSeeder.seedIfNeeded(
+            destination: preferences.soundsDirectory,
+            sourceDirectories: sourceDirectories
+        )
     } catch {
         fputs("Unable to seed default sounds: \(error)\n", stderr)
     }
@@ -194,6 +197,36 @@ func reloadAngleAudio(_ audio: ContinuousAudioController) {
     } catch {
         audio.stop()
         fputs("Unable to reload angle-audio source: \(error)\n", stderr)
+    }
+}
+
+@MainActor
+func runAngleListener(probe: MacLidAngleProbe, source: URL?) {
+    let audio = ContinuousAudioController()
+    let sensor = LidAngleSensorService(probe: probe)
+    do {
+        if let source {
+            try audio.prepare(source: source)
+        }
+        DistributedNotificationCenter.default().addObserver(
+            forName: configurationChangedNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                reloadAngleAudio(audio)
+            }
+        }
+        try sensor.start { audio.apply($0) }
+        RunLoop.main.run()
+    } catch {
+        sensor.stop()
+        audio.stop()
+        fputs("Angle audio failed to start: \(error). Wake fallback remains active.\n", stderr)
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { _ in
+            Task { @MainActor in playWakeFallback() }
+        }
+        RunLoop.main.run()
     }
 }
 
@@ -258,17 +291,17 @@ case "set-sound":
     runSetSoundTUI()
     notifyConfigurationChanged()
 case "add-sounds":
-    let directory = args.dropFirst(2).first.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) } ?? preferences.soundsDirectory
+    let sourceDirectory = args.dropFirst(2).first.map {
+        URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true)
+    }
     do {
-        preferences.setSoundsDirectory(directory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        if directory != preferences.soundsDirectory {
-            for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) where file.pathExtension.lowercased() == "mp3" {
-                let destination = preferences.soundsDirectory.appendingPathComponent(file.lastPathComponent)
-                if !FileManager.default.fileExists(atPath: destination.path) {
-                    try FileManager.default.copyItem(at: file, to: destination)
-                }
-            }
+        if let sourceDirectory {
+            try SoundLibrary.importSounds(
+                from: sourceDirectory,
+                into: preferences.soundsDirectory
+            )
+        } else {
+            try FileManager.default.createDirectory(at: preferences.soundsDirectory, withIntermediateDirectories: true)
         }
         print("Sounds directory: \(preferences.soundsDirectory.path)")
     } catch {
@@ -284,31 +317,10 @@ case "run":
     let source = AngleAudioSourceResolver.resolve(mode: preferences.angleMode, preferences: preferences)
     switch ListenerSelection.resolve(diagnostic: diagnostic, source: source) {
     case .continuous(let source):
-        let audio = ContinuousAudioController()
-        let sensor = LidAngleSensorService(probe: probe)
-        do {
-            try audio.prepare(source: source)
-            DistributedNotificationCenter.default().addObserver(
-                forName: configurationChangedNotification,
-                object: nil,
-                queue: .main
-            ) { _ in
-                Task { @MainActor in
-                    reloadAngleAudio(audio)
-                }
-            }
-            try sensor.start { audio.apply($0) }
-            RunLoop.main.run()
-        } catch {
-            fputs("Angle audio failed to start: \(error). Wake fallback remains active.\n", stderr)
-            NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { _ in
-                Task { @MainActor in playWakeFallback() }
-            }
-            RunLoop.main.run()
-        }
+        runAngleListener(probe: probe, source: source)
     case .continuousSilence(let reason):
         print(reason)
-        RunLoop.main.run()
+        runAngleListener(probe: probe, source: nil)
     case .wakeFallback:
         probe.close()
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { _ in

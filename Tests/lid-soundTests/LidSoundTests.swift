@@ -51,6 +51,18 @@ final class LidSoundTests: XCTestCase {
         XCTAssertLessThan(release.rate, attack.rate)
     }
 
+    func testAudioParameterSmootherCompletesReleaseWithoutNewInput() {
+        var smoother = AudioParameterSmoother()
+        _ = smoother.apply(AngleAudioOutput(gain: 1, rate: 1), at: 0)
+        _ = smoother.apply(AngleAudioOutput(gain: 1, rate: 1), at: 1.0 / 30.0)
+        _ = smoother.apply(AngleAudioOutput(gain: 0, rate: 1), at: 2.0 / 30.0)
+        smoother.finishRelease(at: 2.0 / 30.0)
+        XCTAssertEqual(
+            smoother.apply(AngleAudioOutput(gain: 0, rate: 1), at: 1),
+            AngleAudioOutput(gain: 0, rate: 1)
+        )
+    }
+
     func testInvalidModeDefaultsToBundledLoop() {
         let store = MemoryStore(values: [LidSoundPreferences.angleModeKey: "invalid"])
         XCTAssertEqual(LidSoundPreferences(store: store).angleMode, .bundledLoop)
@@ -68,6 +80,24 @@ final class LidSoundTests: XCTestCase {
         XCTAssertNil(AngleAudioSourceResolver.selectedSoundURL(preferences: preferences))
         FileManager.default.createFile(atPath: directory.appendingPathComponent("sound.mp3").path, contents: Data())
         XCTAssertNotNil(AngleAudioSourceResolver.selectedSoundURL(preferences: preferences))
+    }
+
+    func testSoundLibraryImportsAndSeedsMP3Files() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let source = root.appendingPathComponent("source", isDirectory: true)
+        let destination = root.appendingPathComponent("destination", isDirectory: true)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sound = source.appendingPathComponent("sound.mp3")
+        FileManager.default.createFile(atPath: sound.path, contents: Data([0]))
+        FileManager.default.createFile(atPath: source.appendingPathComponent("ignored.wav").path, contents: Data([0]))
+
+        try SoundLibrary.importSounds(from: source, into: destination)
+        XCTAssertEqual(SoundLibrary.soundFiles(in: destination).map(\.lastPathComponent), ["sound.mp3"])
+
+        try FileManager.default.removeItem(at: destination)
+        try DefaultSoundSeeder.seedIfNeeded(destination: destination, sourceDirectories: [source])
+        XCTAssertEqual(SoundLibrary.soundFiles(in: destination).map(\.lastPathComponent), ["sound.mp3"])
     }
 
     func testBundledLoopAssetResolvesAndCanBeLoaded() {

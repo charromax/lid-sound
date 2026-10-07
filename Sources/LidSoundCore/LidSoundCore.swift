@@ -155,12 +155,17 @@ public struct AudioParameterSmoother {
             current = AngleAudioOutput(gain: 0, rate: target.rate)
             return current
         }
-        let elapsed = max(time - lastTime, 0)
+        let elapsed = min(max(time - lastTime, 0), 1.0 / 30.0)
         current = AngleAudioOutput(
             gain: ramp(current.gain, toward: target.gain, over: target.gain > current.gain ? attack : release, elapsed: elapsed),
             rate: ramp(current.rate, toward: target.rate, over: rateTime, elapsed: elapsed)
         )
         return current
+    }
+
+    public mutating func finishRelease(at time: TimeInterval) {
+        current = AngleAudioOutput(gain: 0, rate: current.rate)
+        lastTime = time
     }
 
     private func ramp(_ value: Float, toward target: Float, over duration: TimeInterval, elapsed: TimeInterval) -> Float {
@@ -261,6 +266,51 @@ public enum AngleAudioSourceResolver {
         switch mode {
         case .bundledLoop: bundledLoopURL()
         case .selectedSound: selectedSoundURL(preferences: preferences)
+        }
+    }
+}
+
+public enum DefaultSoundSeeder {
+    public static func seedIfNeeded(
+        destination: URL,
+        sourceDirectories: [URL],
+        fileManager: FileManager = .default
+    ) throws {
+        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        guard SoundLibrary.soundFiles(in: destination, fileManager: fileManager).isEmpty else { return }
+        for sourceDirectory in sourceDirectories {
+            for source in SoundLibrary.soundFiles(in: sourceDirectory, fileManager: fileManager) {
+                let target = destination.appendingPathComponent(source.lastPathComponent)
+                if !fileManager.fileExists(atPath: target.path) {
+                    try fileManager.copyItem(at: source, to: target)
+                }
+            }
+        }
+    }
+}
+
+public enum SoundLibrary {
+    public static func soundFiles(in directory: URL, fileManager: FileManager = .default) -> [URL] {
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return files.filter { $0.pathExtension.lowercased() == "mp3" }
+            .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
+    }
+
+    public static func importSounds(
+        from sourceDirectory: URL,
+        into destinationDirectory: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        try fileManager.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+        for source in soundFiles(in: sourceDirectory, fileManager: fileManager) {
+            let destination = destinationDirectory.appendingPathComponent(source.lastPathComponent)
+            if !fileManager.fileExists(atPath: destination.path) {
+                try fileManager.copyItem(at: source, to: destination)
+            }
         }
     }
 }
